@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VastuScan</title>
+    <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+    <script src="https://unpkg.com/aframe-animation-component@^4.1.2/dist/aframe-animation-component.min.js"></script>
+    <!-- TensorFlow.js for object detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+    <!-- Enhanced Detection Model -->
+    <script src="model.js"></script>
+    <style>
+      body { margin: 0; font-family: Arial, sans-serif; }
+      
+      #adminPanel {
+        position: absolute; top: 10px; left: 10px;
+        background: rgba(255,255,255,0.95);
+        padding: 15px; border-radius: 8px; z-index: 999;
+        max-width: 300px;
+      }
+      
+      #objectsPanel {
+        position: absolute; top: 10px; right: 10px;
+        background: rgba(0,0,0,0.8); color: white;
+        padding: 15px; border-radius: 8px; z-index: 999;
+        max-width: 280px; max-height: 80vh; overflow-y: auto;
+      }
+      
+      .form-group { margin-bottom: 10px; }
+      label { font-weight: bold; display: block; margin-bottom: 5px; }
+      input, select, textarea { width: 100%; padding: 5px; border-radius: 4px; border: 1px solid #ccc; }
+      button { padding: 8px 12px; margin: 5px 0; border: none; border-radius: 4px; cursor: pointer; }
+      .detect-btn { background: #28a745; color: white; }
+      .add-btn { background: #007bff; color: white; }
+      
+      .object-item {
+        background: rgba(255,255,255,0.1);
+        padding: 8px; margin: 5px 0; border-radius: 4px;
+        border-left: 3px solid #007bff;
+      }
+      
+      .architectural-item {
+        background: rgba(255,165,0,0.2);
+        border-left: 3px solid #ff8c00;
+      }
+      
+      .object-count {
+        font-size: 0.9em; color: #aaa;
+        margin-left: 10px;
+      }
+      
+      #detectionCanvas {
+        position: absolute; top: -9999px; left: -9999px;
+        width: 1024px; height: 1024px;
+      }
+      
+      #loadingIndicator {
+        position: absolute; top: 50%; left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0,0,0,0.8); color: white;
+        padding: 20px; border-radius: 8px;
+        display: none; z-index: 1001;
+      }
+      
+      #infoModal {
+        display: none; position: fixed; top: 0; left: 0;
+        width: 100%; height: 100%; background: rgba(0,0,0,0.6);
+        align-items: center; justify-content: center; z-index: 1000;
+      }
+      
+      #infoModal .modal-content {
+        background: #fff; padding: 30px; border-radius: 6px;
+        max-width: 400px; width: 90%; text-align: left;
+      }
+      
+      .close-btn {
+        float: right; cursor: pointer; font-size: 1.5em; color: #666;
+      }
+      
+      .detection-status {
+        font-size: 0.8em; color: #666;
+        margin-top: 5px;
+      }
+
+      .detection-summary {
+        background: rgba(0,100,200,0.1);
+        padding: 10px; margin: 10px 0;
+        border-radius: 6px; border-left: 3px solid #0064c8;
+      }
+
+      .detection-category {
+        margin: 8px 0;
+        font-size: 0.9em;
+        color: #ccc;
+      }
+    </style>
+    <script>
+      // Billboard component
+      AFRAME.registerComponent('billboard', {
+        tick: function() {
+          const camEl = this.el.sceneEl.camera.el;
+          if (!camEl) return;
+          this.el.object3D.lookAt(camEl.object3D.position);
+        }
+      });
+    </script>
+  </head>
+  <body>
+    <!-- Loading Indicator -->
+    <div id="loadingIndicator">
+      <div>Loading...</div>
+    </div>
+
+    <!-- Admin Controls -->
+    <div id="adminPanel">
+      <h3 style="margin-top: 0;">Panel</h3>
+      
+      <div class="form-group">
+        <label for="roomSelect">Select Room:</label>
+        <select id="roomSelect">
+          <option value="entrance">Entrance</option>
+          <option value="kitchen">Kitchen</option>
+          <option value="room1">Room 1</option>
+          <option value="room2">Room 2</option>
+          <option value="toilet">Toilet</option>
+          <option value="washroom">Washroom</option>
+        </select>
+      </div>
+      
+      <button class="detect-btn" onclick="detectObjectsInCurrentRoom()">
+        Detect Objects
+      </button>
+      
+      <div class="detection-status" id="detectionStatus">
+        
+      </div>
+      
+      <hr style="margin: 15px 0;">
+      
+      <div class="form-group">
+        <label for="hotspotType">Add Hotspot:</label>
+        <select id="hotspotType">
+          <option value="link">Navigation Link</option>
+          <option value="info">Information Point</option>
+        </select>
+      </div>
+      
+      <div id="linkFields" class="form-group">
+        <label for="linkRoom">Link To Room:</label>
+        <select id="linkRoom">
+          <option value="entrance">Entrance</option>
+          <option value="kitchen">Kitchen</option>
+          <option value="room1">Room 1</option>
+          <option value="room2">Room 2</option>
+          <option value="toilet">Toilet</option>
+          <option value="washroom">Washroom</option>
+        </select>
+      </div>
+      
+      <div id="infoFields" class="form-group" style="display:none">
+        <label for="infoTitle">Info Title:</label>
+        <input type="text" id="infoTitle" placeholder="Enter title" />
+        <label for="infoText">Info Text:</label>
+        <textarea id="infoText" rows="3" placeholder="Enter description"></textarea>
+      </div>
+      
+      <button class="add-btn" onclick="addHotspot()">Add Hotspot</button>
+    </div>
+
+    <!-- Objects Detection Panel -->
+    <div id="objectsPanel">
+      <h3 style="margin-top: 0;">Results</h3>
+      <div id="currentRoomObjects">
+        <div style="color: #aaa; font-style: italic;">
+          Click "Detect Objects" to analyze the current room for objects and architectural features
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden canvas for object detection -->
+    <canvas id="detectionCanvas"></canvas>
+
+    <!-- Info Modal -->
+    <div id="infoModal">
+      <div class="modal-content">
+        <span class="close-btn" onclick="hideModal()">×</span>
+        <h2 id="modalTitle"></h2>
+        <p id="modalText"></p>
+      </div>
+    </div>
+
+    <!-- A-Frame Scene -->
+    <a-scene id="scene">
+      <a-assets>
+        
+        <img id="entrance" src="images/entrance.JPG" alt="" />
+        <img id="kitchen"  src="images/kitchen.JPG" alt="" />
+        <img id="room1"    src="images/room1.JPG" alt=""  />
+        <img id="room2"    src="images/room2.JPG" alt="" />
+        <img id="toilet"   src="images/toilet.JPG"alt=""  />
+        <img id="washroom" src="images/washroom.JPG" alt="" />
+      </a-assets>
+
+      <a-sky id="sky" src="#entrance" rotation="0 -90 0"></a-sky>
+      <a-entity id="cameraRig" position="0 1.6 0">
+        <a-camera look-controls>
+          <a-cursor fuse="true" fuse-timeout="1000"
+                    material="color:white;shader:flat"
+                    geometry="primitive:ring;radiusInner:0.01;radiusOuter:0.02"
+                    position="0 0 -1">
+          </a-cursor>
+        </a-camera>
+      </a-entity>
+    </a-scene>
+
+    <script>
+      // Global variables
+      let enhancedDetector = null;
+      let roomObjects = {};
+      const synth = window.speechSynthesis;
+      let voices = [];
+      
+      // Load voices for TTS
+      function loadVoices() {
+        voices = synth.getVoices();
+      }
+      loadVoices();
+      synth.onvoiceschanged = loadVoices;
+
+      // Language detection for TTS
+      function detectLangCode(text) {
+        for (let ch of text) {
+          const c = ch.charCodeAt(0);
+          if (c >= 0x0900 && c <= 0x097F) return 'hi';
+          if (c >= 0x0980 && c <= 0x09FF) return 'bn';
+          if (c >= 0x0A00 && c <= 0x0A7F) return 'pa';
+          if (c >= 0x0A80 && c <= 0x0AFF) return 'gu';
+          if (c >= 0x0B00 && c <= 0x0B7F) return 'or';
+          if (c >= 0x0B80 && c <= 0x0BFF) return 'ta';
+          if (c >= 0x0C00 && c <= 0x0C7F) return 'te';
+          if (c >= 0x0C80 && c <= 0x0CFF) return 'kn';
+          if (c >= 0x0D00 && c <= 0x0D7F) return 'ml';
+        }
+        return 'en';
+      }
+
+      function speakLines(lines) {
+        synth.cancel();
+        if (!voices.length) {
+          synth.onvoiceschanged = () => {
+            loadVoices();
+            speakLines(lines);
+            synth.onvoiceschanged = null;
+          };
+          return;
+        }
+        lines.forEach(line => {
+          const code = detectLangCode(line);
+          let voice = voices.find(v => v.lang.toLowerCase().startsWith(code + '-'))
+                   || voices.find(v => v.lang.toLowerCase().startsWith('hi-'))
+                   || voices.find(v => v.lang.toLowerCase().startsWith('en-'))
+                   || voices[0];
+          const utter = new SpeechSynthesisUtterance(line);
+          utter.voice = voice;
+          utter.lang = voice.lang;
+          synth.speak(utter);
+        });
+      }
+
+      // DOM elements
+      const roomSelect = document.getElementById("roomSelect");
+      const hotspotType = document.getElementById("hotspotType");
+      const linkFields = document.getElementById("linkFields");
+      const infoFields = document.getElementById("infoFields");
+      const sky = document.getElementById("sky");
+      const sceneEl = document.querySelector("a-scene");
+      const modal = document.getElementById("infoModal");
+      const modalTitle = document.getElementById("modalTitle");
+      const modalText = document.getElementById("modalText");
+      const detectionStatus = document.getElementById("detectionStatus");
+      const currentRoomObjects = document.getElementById("currentRoomObjects");
+      const loadingIndicator = document.getElementById("loadingIndicator");
+
+      // Initialize the enhanced object detection model
+      async function initializeModel() {
+        try {
+          loadingIndicator.style.display = 'block';
+          detectionStatus.textContent = "Loading enhanced AI models for architectural detection...";
+          
+          // Initialize the enhanced detector
+          enhancedDetector = new EnhancedObjectDetector();
+          const success = await enhancedDetector.initialize();
+          
+          if (success) {
+            loadingIndicator.style.display = 'none';
+            detectionStatus.textContent = "Ready to detect objects.";
+            detectionStatus.style.color = "#28a745";
+            console.log("system initialized successfully");
+          } else {
+            throw new Error("Failed to initialize enhanced detector");
+          }
+        } catch (error) {
+          loadingIndicator.style.display = 'none';
+          detectionStatus.textContent = "Error loading enhanced AI models. Please refresh the page.";
+          detectionStatus.style.color = "#dc3545";
+          console.error("Error loading enhanced detector:", error);
+        }
+      }
+
+      // Enhanced object detection function
+      async function detectObjectsInCurrentRoom() {
+        if (!enhancedDetector || !enhancedDetector.isInitialized) {
+          detectionStatus.textContent = "AI model not loaded yet. Please wait...";
+          return;
+        }
+
+        const currentRoom = roomSelect.value;
+        detectionStatus.textContent = "Analyzing 360° image with enhanced detection for architectural features...";
+        detectionStatus.style.color = "#007bff";
+
+        try {
+          // Get the current room's 360 image
+          const skyImage = document.getElementById(currentRoom);
+          
+          // Wait for image to load if not already loaded
+          if (!skyImage.complete) {
+            await new Promise(resolve => {
+              skyImage.onload = resolve;
+            });
+          }
+          
+          // Use enhanced detection
+          const detectedObjects = await enhancedDetector.analyzeRoom(skyImage, currentRoom);
+
+          // Store results for this room
+          roomObjects[currentRoom] = detectedObjects;
+          
+          // Update UI
+          updateObjectsDisplay(currentRoom);
+          
+          const objectCount = Object.keys(detectedObjects).length;
+          const totalDetections = Object.values(detectedObjects).reduce((sum, obj) => sum + obj.count, 0);
+          
+          const architecturalCount = Object.values(detectedObjects).filter(obj => obj.type === 'architectural').length;
+          
+          detectionStatus.textContent = `Enhanced detection complete: ${objectCount} types found (${totalDetections} total, ${architecturalCount} architectural features)`;
+          detectionStatus.style.color = "#28a745";
+          
+          console.log("Enhanced detection results:", detectedObjects);
+          
+        } catch (error) {
+          detectionStatus.textContent = "Error during enhanced object detection";
+          detectionStatus.style.color = "#dc3545";
+          console.error("Enhanced detection error:", error);
+        }
+      }
+
+      // Update the objects display panel with enhanced formatting
+      function updateObjectsDisplay(room) {
+        const objects = roomObjects[room] || {};
+        const objectKeys = Object.keys(objects);
+        
+        if (objectKeys.length === 0) {
+          currentRoomObjects.innerHTML = `
+            <div style="color: #aaa; font-style: italic;">
+              No objects detected in ${room}
+              <br><br>
+              
+            </div>
+          `;
+          return;
+        }
+
+        // Separate architectural features from regular objects
+        const architecturalFeatures = {};
+        const regularObjects = {};
+        
+        Object.keys(objects).forEach(key => {
+          if (objects[key].type === 'architectural') {
+            architecturalFeatures[key] = objects[key];
+          } else {
+            regularObjects[key] = objects[key];
+          }
+        });
+
+        let html = `<div class="detection-summary">
+          <strong>${room.charAt(0).toUpperCase() + room.slice(1)} Room Analysis</strong><br>
+          <small>${objectKeys.length} different types detected</small>
+        </div>`;
+
+        // Add architectural features section
+        if (Object.keys(architecturalFeatures).length > 0) {
+          html += `<div class="detection-category"> Architectural Features</div>`;
+          
+          Object.keys(architecturalFeatures).forEach(featureName => {
+            const feature = architecturalFeatures[featureName];
+            const emoji = getArchitecturalEmoji(featureName);
+            
+            html += `
+              <div class="object-item architectural-item">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-weight: bold;">
+                    ${emoji} ${featureName}
+                  </span>
+                  <span class="object-count">${feature.count}x</span>
+                </div>
+                <div style="font-size: 0.8em; color: #aaa; margin-top: 3px;">
+                  Confidence: ${feature.maxConfidence}%
+                </div>
+              </div>
+            `;
+          });
+        }
+
+        // Add regular objects section
+        if (Object.keys(regularObjects).length > 0) {
+          html += `<div class="detection-category"> Other Elements</div>`;
+          
+          // Sort objects by max confidence first, then by count
+          const sortedObjects = Object.keys(regularObjects).sort((a, b) => {
+            const aMaxConf = regularObjects[a].maxConfidence;
+            const bMaxConf = regularObjects[b].maxConfidence;
+            return bMaxConf - aMaxConf;
+          });
+
+          sortedObjects.forEach(objectName => {
+            const obj = regularObjects[objectName];
+            const emoji = getObjectEmoji(objectName);
+            
+            html += `
+              <div class="object-item">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <span style="font-weight: bold;">
+                    ${emoji} ${objectName}
+                  </span>
+                  <span class="object-count">${obj.count}x</span>
+                </div>
+                <div style="font-size: 0.8em; color: #aaa; margin-top: 3px;">
+                  Confidence: ${obj.maxConfidence}% 
+                </div>
+              </div>
+            `;
+          });
+        }
+
+        currentRoomObjects.innerHTML = html;
+      }
+
+      // Get emoji for architectural features
+      function getArchitecturalEmoji(name) {
+        const emojiMap = {
+          'door': '🚪',
+          'window': '🪟',
+          'cabinet': '🗄️',
+          'shelf': '📚',
+          'closet': '👕'
+        };
+        return emojiMap[name] || '🏗️';
+      }
+
+      // Get emoji for regular objects  
+      function getObjectEmoji(name) {
+        const emojiMap = {
+          'person': '👤', 'chair': '🪑', 'couch': '🛋️', 'bed': '🛏️',
+          'dining table': '🍽️', 'toilet': '🚽', 'tv': '📺', 'laptop': '💻',
+          'mouse': '🖱️', 'keyboard': '⌨️', 'cell phone': '📱', 'book': '📚',
+          'clock': '🕐', 'vase': '🏺', 'bottle': '🍶', 'cup': '☕',
+          'bowl': '🥣', 'banana': '🍌', 'apple': '🍎', 'sandwich': '🥪',
+          'orange': '🍊', 'broccoli': '🥦', 'carrot': '🥕', 'pizza': '🍕',
+          'donut': '🍩', 'cake': '🍰', 'potted plant': '🪴',
+          'umbrella': '☂️', 'handbag': '👜', 'tie': '👔', 'suitcase': '🧳',
+          'car': '🚗', 'motorcycle': '🏍️', 'bicycle': '🚲', 'bus': '🚌',
+          'truck': '🚚', 'boat': '⛵', 'cat': '🐱', 'dog': '🐶',
+          'refrigerator': '❄️', 'microwave': '📦', 'oven': '🔥', 'sink': '🚰'
+        };
+        return emojiMap[name] || '📦';
+      }
+
+      // Event listeners
+      function hideModal() {
+        synth.cancel();
+        modal.style.display = "none";
+      }
+
+      hotspotType.addEventListener("change", () => {
+        linkFields.style.display = hotspotType.value === "link" ? "block" : "none";
+        infoFields.style.display = hotspotType.value === "info" ? "block" : "none";
+      });
+
+      roomSelect.addEventListener("change", () => {
+        const r = roomSelect.value;
+        sky.setAttribute("src", `#${r}`);
+        switchHotspotGroup(r);
+        
+        // Update objects display for new room
+        updateObjectsDisplay(r);
+      });
+
+      // Hotspot management functions
+      function getHotspotContainer(room) {
+        let c = document.getElementById(`hotspots-${room}`);
+        if (!c) {
+          c = document.createElement("a-entity");
+          c.id = `hotspots-${room}`;
+          c.setAttribute("visible","false");
+          sceneEl.appendChild(c);
+        }
+        return c;
+      }
+
+      function switchHotspotGroup(room) {
+        document.querySelectorAll("[id^=hotspots-]")
+          .forEach(c => c.setAttribute("visible","false"));
+        getHotspotContainer(room).setAttribute("visible","true");
+      }
+
+      function getCameraDirPos(dist = 10) {
+        const camObj = document.querySelector("[camera]").object3D;
+        const pos = new THREE.Vector3();
+        camObj.getWorldPosition(pos);
+        const dir = new THREE.Vector3();
+        camObj.getWorldDirection(dir).normalize().multiplyScalar(-dist);
+        return `${pos.x+dir.x} ${pos.y+dir.y} ${pos.z+dir.z}`;
+      }
+
+      function addHotspot() {
+        const room = roomSelect.value;
+        const container = getHotspotContainer(room);
+        switchHotspotGroup(room);
+
+        const infoTitleVal = document.getElementById("infoTitle").value.trim() || "Info";
+        const infoTextVal = document.getElementById("infoText").value.trim();
+
+        const type = hotspotType.value;
+        const h = document.createElement("a-entity");
+        h.setAttribute("position", getCameraDirPos());
+        h.setAttribute("billboard","");
+
+        if (type === "link") {
+          const target = document.getElementById("linkRoom").value;
+          [0.25,0.4,0.55].forEach((r,i) => {
+            const ring = document.createElement("a-ring");
+            ring.setAttribute("radius-inner", r-0.02);
+            ring.setAttribute("radius-outer", r);
+            ring.setAttribute("material","color:#106eea;shader:flat;opacity:1;side:double");
+            ring.setAttribute("animation", {
+              property: "scale", to: "1.2 1.2 1.2",
+              dir: "alternate", dur: 800+i*200, loop: true
+            });
+            h.appendChild(ring);
+          });
+          const trigger = document.createElement("a-sphere");
+          trigger.setAttribute("radius",0.6);
+          trigger.setAttribute("material","opacity:0;transparent:true;side:double");
+          trigger.addEventListener("click", () => {
+            roomSelect.value = target;
+            sky.setAttribute("src", `#${target}`);
+            switchHotspotGroup(target);
+            updateObjectsDisplay(target);
+          });
+          h.appendChild(trigger);
+
+        } else {
+          const bg = document.createElement("a-circle");
+          bg.setAttribute("radius",0.3);
+          bg.setAttribute("material","color:#106eea;shader:flat;opacity:0.5;side:double");
+          h.appendChild(bg);
+
+          const icon = document.createElement("a-image");
+          icon.setAttribute("src",
+            "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48dGV4dCB4PSI1MCUiIHk9IjUwJSIgZG9taW5hbnQtYmFzZWxpbmU9Im1pZGRsZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNTAiIGZpbGw9IndoaXRlIj4mI3gwOTUwOzwvdGV4dD48L3N2Zz4="
+          );
+          icon.setAttribute("width",0.5);
+          icon.setAttribute("height",0.5);
+          icon.setAttribute("position","0 -0.05 0.02");
+          icon.setAttribute("billboard","");
+          h.appendChild(icon);
+
+          const trigger = document.createElement("a-sphere");
+          trigger.setAttribute("radius",0.5);
+          trigger.setAttribute("material","opacity:0;transparent:true;side:double");
+          trigger.addEventListener("click", () => {
+            modalTitle.textContent = infoTitleVal;
+            modalText.textContent = infoTextVal;
+            modal.style.display = "flex";
+            speakLines([infoTitleVal, infoTextVal]);
+          });
+          h.appendChild(trigger);
+        }
+
+        container.appendChild(h);
+      }
+
+      // Initialize everything
+      switchHotspotGroup(roomSelect.value);
+      initializeModel();
+      updateObjectsDisplay(roomSelect.value);
+    </script>
+  </body>
+</html>
