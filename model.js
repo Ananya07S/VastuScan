@@ -1,4 +1,8 @@
 /**
+ * model.js - AI module for enhanced object and architectural feature detection.
+ * Uses TensorFlow.js with coco-ssd, and integrates room-based logic.
+ */
+/**
  * Enhanced Object Detection Model for 360° Virtual Tours
  * Combines COCO-SSD with custom architectural feature detection
  */
